@@ -48,7 +48,7 @@ else:
 config_file_path = 'configs/folders_test.json'
 
 # Função para procurar e copiar arquivos
-def search_and_copy_files(ctx, folder_url, target_ctx, target_folder_sped, target_folder_relatorios, month_year):
+def search_and_copy_files(ctx, folder_url, target_ctx, target_folder_sped, target_folder_relatorios, target_folder_guias, month_year):
     logging.info("Procurando arquivos em: %s", folder_url)
     folder = ctx.web.get_folder_by_server_relative_url(folder_url)
     subfolders = folder.folders
@@ -75,8 +75,34 @@ def search_and_copy_files(ctx, folder_url, target_ctx, target_folder_sped, targe
             ctx.execute_query()
             for comp_file in composition_files:
                 if comp_file.properties['Name'].endswith(".pdf"):
-                    logging.info("Encontrado arquivo PDF: %s", comp_file.properties['Name'])
+                    logging.info("Encontrado arquivo PDF em Composição: %s", comp_file.properties['Name'])
                     copy_file(ctx, comp_file, target_ctx, target_folder_relatorios, comp_file.properties['Name'])
+
+def search_and_copy_guias(ctx, fiscal_folder_url, target_ctx, target_folder_guias):
+    logging.info("Procurando arquivos na pasta Guias Impostos: %s", fiscal_folder_url)
+    fiscal_folder = ctx.web.get_folder_by_server_relative_url(fiscal_folder_url)
+    subfolders = fiscal_folder.folders
+    ctx.load(subfolders)
+    ctx.execute_query()
+
+    for subfolder in subfolders:
+        if subfolder.properties['Name'] == "Guias Impostos":
+            guias_folder_url = subfolder.serverRelativeUrl
+            guias_folder = ctx.web.get_folder_by_server_relative_url(guias_folder_url)
+            guias_subfolders = guias_folder.folders
+            ctx.load(guias_subfolders)
+            ctx.execute_query()
+            for guias_subfolder in guias_subfolders:
+                if guias_subfolder.properties['Name'] == "Federal":
+                    federal_folder_url = guias_subfolder.serverRelativeUrl
+                    federal_folder = ctx.web.get_folder_by_server_relative_url(federal_folder_url)
+                    federal_files = federal_folder.files
+                    ctx.load(federal_files)
+                    ctx.execute_query()
+                    for federal_file in federal_files:
+                        if federal_file.properties['Name'].endswith(".pdf"):
+                            logging.info("Encontrado arquivo PDF em Guias Impostos: %s", federal_file.properties['Name'])
+                            copy_file(ctx, federal_file, target_ctx, target_folder_guias, federal_file.properties['Name'])
 
 # Função para copiar arquivos
 def copy_file(ctx, source_file, target_ctx, target_folder_url, new_file_name):
@@ -136,9 +162,14 @@ def main():
                 for year in range(2024, 2025):  # Modifique este range conforme necessário
                     for month in range(1, 13):
                         month_folder = f"{month:02d}-{year}"
-                        sped_folder_url = os.path.join(folder.serverRelativeUrl, subfolder, "Fiscal", str(year), month_folder, "Sped Contribuições")
+                        fiscal_folder_url = os.path.join(folder.serverRelativeUrl, subfolder, "Fiscal", str(year), month_folder)
+                        sped_folder_url = os.path.join(fiscal_folder_url, "Sped Contribuições")
                         logging.info("Procurando arquivos na pasta: %s", sped_folder_url)
-                        search_and_copy_files(ctx, sped_folder_url, ctx_landing_zone, "/personal/erick_bryan_planning_com_br/Documents/landing_zone/SpedContribuicoes", "/personal/erick_bryan_planning_com_br/Documents/landing_zone/RelatoriosContasRecebidas", month_folder)
+                        search_and_copy_files(ctx, sped_folder_url, ctx_landing_zone, "/personal/erick_bryan_planning_com_br/Documents/landing_zone/SpedContribuicoes", "/personal/erick_bryan_planning_com_br/Documents/landing_zone/RelatoriosContasRecebidas", "/personal/erick_bryan_planning_com_br/Documents/landing_zone/GuiasImpostos", month_folder)
+                        
+                        guias_folder_url = os.path.join(fiscal_folder_url, "Guias Impostos")
+                        logging.info("Procurando arquivos na pasta: %s", guias_folder_url)
+                        search_and_copy_guias(ctx, fiscal_folder_url, ctx_landing_zone, "/personal/erick_bryan_planning_com_br/Documents/landing_zone/GuiasImpostos")
 
 if __name__ == "__main__":
     main()
