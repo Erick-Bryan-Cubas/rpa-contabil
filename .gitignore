@@ -1,2 +1,5 @@
 envs/.env
 configs/**
+data/**
+rpa-contabil-venv
+keys/bi-planning.json
