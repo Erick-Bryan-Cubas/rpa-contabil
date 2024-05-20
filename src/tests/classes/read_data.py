@@ -61,42 +61,40 @@ def read_pdf_content(ctx, folder_url, pdf_name):
 
     return pdf_text
 
-# Função para corrigir caracteres, extrair o CNPJ, nome da empresa, valor total, data de vencimento, data de apuração, número do documento, código e descrição do imposto
+# Função para extrair o CNPJ, nome da empresa, valor total, data de vencimento, data de apuração, número do documento, código e descrição do imposto
 def extract_data(pdf_content):
-    corrected_content = pdf_content.replace('�', 'ã').replace('�', 'ç')
-    
     # Extrair CNPJ e nome da empresa
-    start_index = corrected_content.find("Documento de Arrecadação\nde Receitas Federais\n \n") + len("Documento de Arrecadação\nde Receitas Federais\n \n")
-    cnpj = corrected_content[start_index:start_index + 18]
-    end_index = corrected_content.find("\nPeríodo de Apuração", start_index)
-    company_name = corrected_content[start_index + 19:end_index].strip()
+    start_index = pdf_content.find("Documento de Arrecadação\nde Receitas Federais\n \n") + len("Documento de Arrecadação\nde Receitas Federais\n \n")
+    cnpj = pdf_content[start_index:start_index + 18].strip()
+    end_index = pdf_content.find("\nPeríodo de Apuração", start_index)
+    company_name = pdf_content[start_index + 19:end_index].strip()
     
     # Extrair valor total do documento
-    value_start_index = corrected_content.find("Valor Total do Documento\n") + len("Valor Total do Documento\n")
-    value_end_index = corrected_content.find("CNPJ", value_start_index)
-    total_value = corrected_content[value_start_index:value_end_index].strip()
+    value_start_index = pdf_content.find("Valor Total do Documento\n") + len("Valor Total do Documento\n")
+    value_end_index = pdf_content.find("CNPJ", value_start_index)
+    total_value = pdf_content[value_start_index:value_end_index].strip()
     
     # Extrair data de vencimento
-    due_date_start_index = corrected_content.find("Pagar este documento até\n") + len("Pagar este documento até\n")
-    due_date_end_index = corrected_content.find("Observações", due_date_start_index)
-    due_date = corrected_content[due_date_start_index:due_date_end_index].strip()
+    due_date_start_index = pdf_content.find("Pagar este documento até\n") + len("Pagar este documento até\n")
+    due_date_end_index = pdf_content.find("Observações", due_date_start_index)
+    due_date = pdf_content[due_date_start_index:due_date_end_index].strip()
     
     # Extrair data de apuração
-    apuration_date_start_index = corrected_content.find("Razão Social\n") + len("Razão Social\n")
-    apuration_date_end_index = corrected_content.find(" ", apuration_date_start_index)
-    apuration_date = corrected_content[apuration_date_start_index:apuration_date_end_index].strip()
+    apuration_date_start_index = pdf_content.find("Razão Social\n") + len("Razão Social\n")
+    apuration_date_end_index = pdf_content.find(" ", apuration_date_start_index)
+    apuration_date = pdf_content[apuration_date_start_index:apuration_date_end_index].strip()
 
     # Extrair número do documento
-    doc_number_start_index = corrected_content.find("Número do Documento\n") + len("Número do Documento\n")
-    doc_number_end_index = corrected_content.find("Pagar este", doc_number_start_index)
-    doc_number = corrected_content[doc_number_start_index:doc_number_end_index].strip()
+    doc_number_start_index = pdf_content.find("Número do Documento\n") + len("Número do Documento\n")
+    doc_number_end_index = pdf_content.find("Pagar este", doc_number_start_index)
+    doc_number = pdf_content[doc_number_start_index:doc_number_end_index].strip()
 
     # Extrair código e descrição do imposto
-    tax_code_start_index = corrected_content.find("Total Multa JurosComposição do Documento de Arrecadação\n") + len("Total Multa JurosComposição do Documento de Arrecadação\n")
-    tax_code = corrected_content[tax_code_start_index:tax_code_start_index + 4].strip()
-    tax_description = corrected_content[tax_code_start_index + 4:tax_code_start_index + 40].strip()
+    tax_code_start_index = pdf_content.find("Total Multa JurosComposição do Documento de Arrecadação\n") + len("Total Multa JurosComposição do Documento de Arrecadação\n")
+    tax_code = pdf_content[tax_code_start_index:tax_code_start_index + 4].strip()
+    tax_description = pdf_content[tax_code_start_index + 4:tax_code_start_index + 40].strip()
     
-    return cnpj, company_name, total_value, due_date, apuration_date, doc_number, tax_code, tax_description
+    return cnpj, company_name, total_value, due_date, apuration_date, doc_number, tax_code, tax_description, pdf_content
 
 # Função para salvar os dados extraídos em um arquivo JSON
 def save_data_to_json(cnpj, company_name, total_value, due_date, apuration_date, doc_number, tax_code, tax_description, output_filename):
@@ -113,6 +111,16 @@ def save_data_to_json(cnpj, company_name, total_value, due_date, apuration_date,
         }, json_file, ensure_ascii=False, indent=4)
     logging.info("Dados salvos em %s", output_filename)
 
+# Função para salvar os dados extraídos e o conteúdo em arquivos JSON separados
+def save_data_and_text_to_json(cnpj, company_name, total_value, due_date, apuration_date, doc_number, tax_code, tax_description, pdf_content, data_output_filename, text_output_filename):
+    save_data_to_json(cnpj, company_name, total_value, due_date, apuration_date, doc_number, tax_code, tax_description, data_output_filename)
+    
+    with open(text_output_filename, 'w') as json_file:
+        json.dump({
+            "Content": pdf_content
+        }, json_file, ensure_ascii=False, indent=4)
+    logging.info("Conteúdo salvo em %s", text_output_filename)
+
 # Função principal
 def main():
     # Caminho relativo do SharePoint para a pasta GuiasImpostos na landing zone
@@ -123,17 +131,18 @@ def main():
     logging.info("Arquivos PDF encontrados: %s", pdf_files)
 
     # Ler o conteúdo de um PDF específico como teste
-    pdf_name = 'Infinity - Darf de COFINS 01.2024.pdf'
+    pdf_name = 'Loteamento Alto do Cruzeiro - Darf de COFINS 04.2024 (18 lotes).pdf'
     if pdf_name in pdf_files:
         logging.info("Lendo o PDF: %s", pdf_name)
         pdf_content = read_pdf_content(ctx, guias_folder_url, pdf_name)
 
         # Extrair o CNPJ, o nome da empresa, o valor total, a data de vencimento, a data de apuração, o número do documento, o código e a descrição do imposto
-        cnpj, company_name, total_value, due_date, apuration_date, doc_number, tax_code, tax_description = extract_data(pdf_content)
+        cnpj, company_name, total_value, due_date, apuration_date, doc_number, tax_code, tax_description, pdf_content = extract_data(pdf_content)
 
-        # Salvar os dados em um arquivo JSON
-        output_filename = pdf_name.replace('.pdf', '_data.json')
-        save_data_to_json(cnpj, company_name, total_value, due_date, apuration_date, doc_number, tax_code, tax_description, output_filename)
+        # Salvar os dados e o conteúdo em arquivos JSON separados
+        data_output_filename = pdf_name.replace('.pdf', '_data.json')
+        text_output_filename = pdf_name.replace('.pdf', '_text.json')
+        save_data_and_text_to_json(cnpj, company_name, total_value, due_date, apuration_date, doc_number, tax_code, tax_description, pdf_content, data_output_filename, text_output_filename)
     else:
         logging.error("O PDF %s não foi encontrado na pasta %s", pdf_name, guias_folder_url)
 
