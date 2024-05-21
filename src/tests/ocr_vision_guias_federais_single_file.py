@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from office365.sharepoint.client_context import ClientContext
 from office365.runtime.auth.authentication_context import AuthenticationContext
 from office365.sharepoint.files.file import File
+import difflib
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -18,7 +19,7 @@ load_dotenv('envs/.env')
 # Variáveis de ambiente
 google_credentials_path = os.getenv('GOOGLE_CLOUD_CREDENTIALS')
 caminho_landing_zone = os.getenv('caminho_landing_zone')
-pdf_file_name = "Loteamento Alto do Cruzeiro - Darf de COFINS 04.2024 (18 lotes).pdf"
+pdf_file_name = "Jardim Imperial - Darf de PIS 04.2024.pdf"
 folder_path = "GuiasImpostos"
 usuario = os.getenv('usuario')
 senha = os.getenv('senha')
@@ -149,46 +150,146 @@ def extract_text_from_images(images):
 
     return texts
 
+# Função para encontrar termos semelhantes
+def find_similar_term(term, lines):
+    match = difflib.get_close_matches(term, lines, n=1, cutoff=0.8)
+    return match[0] if match else None
+
+# Função para validar datas no formato dd/mm/yyyy
+def is_valid_date(date_str):
+    if len(date_str) != 10:
+        return False
+    try:
+        day, month, year = map(int, date_str.split('/'))
+        return 1 <= day <= 31 and 1 <= month <= 12 and len(str(year)) == 4
+    except ValueError:
+        return False
+
 # Função para processar o texto extraído e gerar o JSON formatado
 def process_text_and_generate_json(text):
-    lines = text.split('\n')
-    data = {}
+    if not text.startswith("Receita Federal\nDocumento de Arrecadação\nde Receitas Federais\n"):
+        logging.warning("PDF fora do formato de Guia Federal.")
+        return None
 
-    # Extrair o CNPJ
-    cnpj_index = lines.index("Razão Social") + 1
-    data["CNPJ"] = lines[cnpj_index].split()[0]
+    try:
+        lines = text.split('\n')
+        data = {}
 
-    # Extrair a Razão Social
-    razao_social_index = cnpj_index
-    data["Razão Social"] = " ".join(lines[razao_social_index].split()[1:])
+        # Extrair o CNPJ
+        cnpj_index = find_similar_term("Razão Social", lines)
+        if cnpj_index:
+            cnpj_index = lines.index(cnpj_index) + 1
+            data["CNPJ"] = lines[cnpj_index].split()[0]
+        else:
+            logging.error("Erro ao encontrar 'Razão Social' para extrair o CNPJ.")
+            return None
 
-    # Extrair o Período de Apuração
-    inicio_periodo_apuracao = text.index("\nData de Vencimento\n") + len("\nData de Vencimento\n")
-    fim_periodo_apuracao = inicio_periodo_apuracao + 10
-    data["Periodo de Apuração"] = text[inicio_periodo_apuracao:fim_periodo_apuracao]
+        # Extrair a Razão Social
+        try:
+            razao_social_index = cnpj_index
+            data["Razão Social"] = " ".join(lines[razao_social_index].split()[1:])
+        except IndexError:
+            logging.error("Erro ao extrair 'Razão Social'.")
+            return None
 
-    # Extrair a Data de Vencimento
-    inicio_data_vencimento = fim_periodo_apuracao + 1
-    fim_data_vencimento = text.index("\nObservações\n")
-    data["Data de Vencimento"] = text[inicio_data_vencimento:fim_data_vencimento]
+        # Extrair o Período de Apuração
+        try:
+            periodo_apuracao_index = lines.index("Periodo de Apuração") + 1
+            periodo_apuracao = lines[periodo_apuracao_index]
+            if len(periodo_apuracao) == 10 and is_valid_date(periodo_apuracao):
+                data["Periodo de Apuração"] = periodo_apuracao
+            else:
+                logging.error(f"Período de Apuração inválido: {periodo_apuracao}")
+                # Se o Período de Apuração for inválido, extrair do "Número do Documento"
+                periodo_apuracao = lines[10]
+                if len(periodo_apuracao) == 10 and is_valid_date(periodo_apuracao):
+                    data["Periodo de Apuração"] = periodo_apuracao
+                else:
+                    logging.error(f"Período de Apuração inválido após ajuste: {periodo_apuracao}")
+                    return None
+        except ValueError:
+            logging.error("Erro ao encontrar 'Periodo de Apuração'.")
+            return None
 
-    # Extrair Observações
-    observacoes_index = lines.index("Observações") + 1
-    data["Observações"] = lines[observacoes_index]
+        # Extrair a Data de Vencimento
+        try:
+            data_vencimento_index = lines.index("Data de Vencimento") + 1
+            data_vencimento = lines[data_vencimento_index]
+            if len(data_vencimento) == 10 and is_valid_date(data_vencimento):
+                data["Data de Vencimento"] = data_vencimento
+            else:
+                logging.error(f"Data de Vencimento inválida: {data_vencimento}")
+                # Se a Data de Vencimento for inválida, será a line 49
+                data_vencimento = lines[49]
+                if len(data_vencimento) == 10 and is_valid_date(data_vencimento):
+                    data["Data de Vencimento"] = data_vencimento
+                else:
+                    logging.error(f"Data de Vencimento inválida após ajuste: {data_vencimento}")
+                    return None                
+        except ValueError:
+            logging.error("Erro ao encontrar 'Data de Vencimento'.")
+            return None
 
-    # Extrair Número do Documento
-    numero_documento_index = lines.index("Número do Documento") + 1
-    data["Número do Documento"] = lines[numero_documento_index]
+        # Extrair Observações
+        observacoes_index = find_similar_term("Observações", lines) or find_similar_term("Observades", lines)
+        if observacoes_index:
+            observacoes_index = lines.index(observacoes_index) + 1
+            observacoes = lines[observacoes_index]
+            if observacoes.startswith("Darf"):
+                data["Observações"] = observacoes
+            else:
+                logging.error(f"Observações inválidas: {observacoes}")
+                # Se as Observações forem inválidas, será a line que contém "Darf"
+                observacoes = find_similar_term('Darf emitido pelo Sicalc Web', lines)
+                if observacoes and observacoes.startswith("Darf"):
+                    data["Observações"] = observacoes
+                else:
+                    logging.error(f"Observações inválidas após ajuste: {observacoes}")
+                    return None
+        else:
+            logging.error("Erro ao encontrar 'Observações'.")
+            return None
 
-    # Extrair Valor Total do Documento
-    valor_total_documento_index = lines.index("Valor Total do Documento") + 1
-    data["Valor Total do Documento"] = lines[valor_total_documento_index]
+        # Extrair Número do Documento
+        try:
+            numero_documento_index = lines.index("Número do Documento") + 1
+            numero_documento = lines[numero_documento_index]
+            if len(numero_documento) == 21:
+                data["Número do Documento"] = numero_documento
+            else:
+                logging.error(f"Número do Documento inválido: {numero_documento}")
+                numero_documento = lines[12]
+                if len(numero_documento) == 21:
+                    data["Número do Documento"] = numero_documento
+                else:
+                    logging.error(f"Número do Documento inválido após ajuste: {numero_documento}")
+                    return None
+        except ValueError:
+            logging.error("Erro ao encontrar 'Número do Documento'.")
+            return None
 
-    # Extrair Código Denominação
-    codigo_denominacao_index = lines.index("Código Denominação") + 1
-    data["Código Denominação"] = " ".join(lines[codigo_denominacao_index:codigo_denominacao_index + 3])
+        # Extrair Valor Total do Documento
+        valor_total_documento_term = find_similar_term("Valor Total do Documento", lines) or find_similar_term("Valor Total de Documento", lines)
+        if valor_total_documento_term:
+            valor_total_documento_index = lines.index(valor_total_documento_term) + 1
+            data["Valor Total do Documento"] = lines[valor_total_documento_index]
+        else:
+            logging.error("Erro ao encontrar 'Valor Total do Documento'.")
+            return None
 
-    return [data]
+        # Extrair Código Denominação
+        try:
+            codigo_denominacao_index = lines.index("Código Denominação") + 1
+            data["Código Denominação"] = " ".join(lines[codigo_denominacao_index:codigo_denominacao_index + 3])
+        except ValueError:
+            logging.error("Erro ao encontrar 'Código Denominação'.")
+            return None
+
+        return data
+
+    except Exception as e:
+        logging.error(f"Erro ao processar texto: {str(e)}")
+        return None
 
 # Função para salvar textos extraídos em um arquivo JSON
 def save_texts_to_json(texts, output_path):
