@@ -9,9 +9,10 @@ from dotenv import load_dotenv
 from office365.sharepoint.client_context import ClientContext
 from office365.runtime.auth.authentication_context import AuthenticationContext
 from office365.sharepoint.files.file import File
+from PIL import Image, ImageEnhance, ImageFilter
 import difflib
 import re
-
+import cv2
 # Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -100,12 +101,31 @@ def convert_pdf_to_images(pdf_path, images_dir):
     images = []
     for page_num in range(len(doc)):
         page = doc.load_page(page_num)
-        pix = page.get_pixmap()
+        # Aumenta a resolução da imagem
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
         image_path = os.path.join(images_dir, f"page_{page_num}.png")
         pix.save(image_path)
         images.append(image_path)
     logging.info(f"PDF convertido em {len(images)} imagens.")
     return images
+
+# Função para melhorar a qualidade da imagem
+def enhance_image(image_path):
+    image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    
+    # Redimensionar a imagem para uma maior resolução
+    image = cv2.resize(image, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    
+    # Aplicar filtro de desfoque para reduzir ruído
+    image = cv2.medianBlur(image, 3)
+    
+    # Aplicar filtro de limiarização adaptativa
+    image = cv2.adaptiveThreshold(image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+    
+    enhanced_image_path = image_path.replace('.png', '_enhanced.png')
+    cv2.imwrite(enhanced_image_path, image)
+    
+    return enhanced_image_path
 
 # Função para extrair texto das imagens usando Google Cloud Vision API
 def extract_text_from_images(images):
@@ -114,7 +134,9 @@ def extract_text_from_images(images):
     headers = {'Content-Type': 'application/json'}
 
     for image_path in images:
-        with open(image_path, "rb") as image_file:
+        enhanced_image_path = enhance_image(image_path)
+        
+        with open(enhanced_image_path, "rb") as image_file:
             my_base64 = base64.b64encode(image_file.read()).decode('utf-8')
         
         data = {
@@ -144,7 +166,7 @@ def extract_text_from_images(images):
             text = r['responses'][0]['textAnnotations'][0]['description']
             texts.append(text)
         else:
-            texts.append("")
+            texts.append("")       
 
     return texts
 
@@ -162,7 +184,16 @@ def is_valid_date(date_str):
         return 1 <= day <= 31 and 1 <= month <= 12 and len(str(year)) == 4
     except ValueError:
         return False
-
+    
+# Função para validar formato de mês/ano
+def is_valid_month_year(month_year_str):
+    months = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+    try:
+        month, year = month_year_str.split('/')
+        return month in months and len(year) == 4 and year.isdigit()
+    except ValueError:
+        return False
+    
 # Função para validar formato do Número do Documento
 def is_valid_numero_documento(numero):
     if len(numero) != 21:
@@ -177,17 +208,19 @@ def get_codigo_denominacao_info(line):
         "2372": "CSLL - DEMAIS Principal",
         "2172": "COFINS CONTRIB P/ FIN. SEG. SOCIAL",
         "2009": "IRPJ LUCRO PRESUMIDO",
-        "8109": "PIS - FATURAMENTO Principal"
+        "8109": "PIS - FATURAMENTO Principal",
+        "2089": "IRPJ LUCRO PRESUMIDO",
+        "1708": "IRRF - REMUNER SERV PRESTADOS POR PJ"
     }
 
     for codigo, descricao in codigos.items():
-        if line.startswith(codigo):
+        if codigo in line:
             return codigo, descricao
     return None, None
 
 # Função para processar o texto extraído e gerar o JSON formatado
 def process_text_and_generate_json(text):
-    if not text.startswith("Receita Federal\nDocumento de Arrecadação\nde Receitas Federais\n"):
+    if not text.startswith("Receita Federal\n"):
         logging.warning("PDF fora do formato de Guia Federal.")
         return None
 
@@ -199,27 +232,27 @@ def process_text_and_generate_json(text):
         data["Nome do Arquivo"] = pdf_file_name
         
         # Extrair o CNPJ
-        cnpj_index = find_similar_term("Razão Social", lines)
-        if cnpj_index:
-            cnpj_index = lines.index(cnpj_index) + 1
-            cnpj = lines[cnpj_index].split()[0]
+        try:
+            cnpj_index = text.index("\nCNPJ\n") + len("\nCNPJ\n")
+            cnpj = text[cnpj_index:cnpj_index + 18]
             data["CNPJ"] = cnpj
-        else:
-            logging.error("Erro ao encontrar 'Razão Social' para extrair o CNPJ.")
+        except ValueError:
+            logging.error("Erro ao encontrar 'CNPJ'.")
             return None
 
         # Extrair a Razão Social
-        try:
-            razao_social_index = cnpj_index
-            razao_social = " ".join(lines[razao_social_index].split()[1:])
-            data["Razão Social"] = razao_social
-        except IndexError:
-            logging.error("Erro ao extrair 'Razão Social'.")
-            return None
+        #try:
+        #    inicio_razao_social = text.index("\nde Receitas Federais\n") + len("\nde Receitas Federais\n")
+        #    fim_razao_social = text.index("\nData de Vencimento\n")
+        #    razao_social = text[inicio_razao_social:fim_razao_social].strip()
+        #    data["Razão Social"] = razao_social
+        #except ValueError:
+        #    logging.error("Erro ao encontrar 'Razão Social'.")
+        #    return None
 
         # Extrair o Período de Apuração
         try:
-            periodo_apuracao = next((line for line in lines if is_valid_date(line)), None)
+            periodo_apuracao = next((line for line in lines if is_valid_date(line) or is_valid_month_year(line)), None)
             if periodo_apuracao:
                 data["Periodo de Apuração"] = periodo_apuracao
             else:
@@ -243,18 +276,19 @@ def process_text_and_generate_json(text):
 
         # Verificar se Período de Apuração é menor que Data de Vencimento
         try:
-            periodo_apuracao_date = datetime.strptime(data["Periodo de Apuração"], "%d/%m/%Y")
-            data_vencimento_date = datetime.strptime(data["Data de Vencimento"], "%d/%m/%Y")
-            if periodo_apuracao_date >= data_vencimento_date:
-                logging.error(f"Período de Apuração {data['Periodo de Apuração']} não pode ser maior ou igual à Data de Vencimento {data['Data de Vencimento']}.")
-                return None
+            if is_valid_date(data["Periodo de Apuração"]) and is_valid_date(data["Data de Vencimento"]):
+                periodo_apuracao_date = datetime.strptime(data["Periodo de Apuração"], "%d/%m/%Y")
+                data_vencimento_date = datetime.strptime(data["Data de Vencimento"], "%d/%m/%Y")
+                if periodo_apuracao_date >= data_vencimento_date:
+                    logging.error(f"Período de Apuração {data['Periodo de Apuração']} não pode ser maior ou igual à Data de Vencimento {data['Data de Vencimento']}.")
+                    return None
         except ValueError as e:
             logging.error(f"Erro ao comparar datas: {str(e)}")
             return None
 
         # Extrair Observações
         try:
-            observacoes_index = next((line for line in lines if "Darf emitido pelo Sicalc Web" in line or line.startswith("Nº Recibo Declaração")), None)
+            observacoes_index = next((line for line in lines if "Darf emitido pelo Sicalc Web" in line or line.startswith("N° Recibo Declaração")), None)
             if observacoes_index:
                 observacoes_index = lines.index(observacoes_index)
                 observacoes = lines[observacoes_index]
@@ -290,7 +324,7 @@ def process_text_and_generate_json(text):
 
         # Extrair Código Denominação e Descrição Cod Denominação
         try:
-            codigo_denom_line = next((line for line in lines if any(line.startswith(codigo) for codigo in ["8189", "2889", "2372", "2172", "2009", "8109"])), None)
+            codigo_denom_line = next((line for line in lines if any(codigo in line for codigo in ["8189", "2889", "2372", "2172", "2009", "8109", "2089", "1708"])), None)
             if codigo_denom_line:
                 codigo_denom, descricao_denom = get_codigo_denominacao_info(codigo_denom_line)
                 if codigo_denom:
