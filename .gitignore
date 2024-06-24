@@ -1,5 +1,10 @@
 envs/.env
 configs/**
-data/**
+src/data/files/*
+src/data/images/*
+src/data/output/*
+!src/data/files/.gitkeep
+!src/data/images/.gitkeep
+!src/data/output/.gitkeep
 rpa-contabil-venv
 keys/bi-planning.json
